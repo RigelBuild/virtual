@@ -74,3 +74,14 @@ jobs:
         uses: TanStack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3 # main
       - name: Changeset Preview
         uses: TanStack/config/.github/changeset-preview@e4b48f16568324f76f467aa4c2aac2f05db632c3 # main
+
+  # RigelBuild: aggregator producing a check-run literally named `CI` for
+  # main branch-protection to pin (RIG-2213). Green iff the real `test` gate
+  # passes; deliberately does not depend on the publish jobs (preview,
+  # provenance, version-preview) which can fail for reasons unrelated to code.
+  CI:
+    name: CI
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ok
