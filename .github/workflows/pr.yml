@@ -35,6 +35,13 @@ jobs:
         run: pnpm run test:pr
   preview:
     name: Preview
+    # RigelBuild fork: the pkg.pr.new preview publish needs an
+    # NX_CLOUD_ACCESS_TOKEN / registry creds we don't hold and produces no
+    # artifact the monorepo consumes (we pull @tanstack/virtual-core from
+    # npm). Scope it to the upstream owner, mirroring release.yml's own
+    # `if: github.repository_owner == 'TanStack'` guard, so it skips cleanly
+    # on the fork instead of reddening every PR. (RIG-2213)
+    if: github.repository_owner == 'TanStack'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -74,3 +81,25 @@ jobs:
         uses: TanStack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3 # main
       - name: Changeset Preview
         uses: TanStack/config/.github/changeset-preview@e4b48f16568324f76f467aa4c2aac2f05db632c3 # main
+
+  # RigelBuild: aggregator producing a check-run literally named `CI` for
+  # main branch-protection to pin (RIG-2213). Green iff the real `test` gate
+  # passes; deliberately does not depend on the publish jobs (preview,
+  # provenance, version-preview) which can fail for reasons unrelated to code.
+  CI:
+    name: CI
+    # Run even when `test` fails/skips so this required check reports an
+    # explicit `failure` rather than `skipped`. Branch protection treats a
+    # skipped required check as passing, so a bare `needs: [test]` (default
+    # `if: success()`) would let a red `test` merge — the gate must fail
+    # closed on the exact failure it exists to catch.
+    if: ${{ always() }}
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate on test result
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "test job result: ${{ needs.test.result }}" >&2
+            exit 1
+          fi
