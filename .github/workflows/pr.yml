@@ -35,6 +35,13 @@ jobs:
         run: pnpm run test:pr
   preview:
     name: Preview
+    # RigelBuild fork: the pkg.pr.new preview publish needs an
+    # NX_CLOUD_ACCESS_TOKEN / registry creds we don't hold and produces no
+    # artifact the monorepo consumes (we pull @tanstack/virtual-core from
+    # npm). Scope it to the upstream owner, mirroring release.yml's own
+    # `if: github.repository_owner == 'TanStack'` guard, so it skips cleanly
+    # on the fork instead of reddening every PR. (RIG-2213)
+    if: github.repository_owner == 'TanStack'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
