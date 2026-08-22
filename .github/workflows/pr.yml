@@ -88,7 +88,18 @@ jobs:
   # provenance, version-preview) which can fail for reasons unrelated to code.
   CI:
     name: CI
+    # Run even when `test` fails/skips so this required check reports an
+    # explicit `failure` rather than `skipped`. Branch protection treats a
+    # skipped required check as passing, so a bare `needs: [test]` (default
+    # `if: success()`) would let a red `test` merge — the gate must fail
+    # closed on the exact failure it exists to catch.
+    if: ${{ always() }}
     needs: [test]
     runs-on: ubuntu-latest
     steps:
-      - run: echo ok
+      - name: Gate on test result
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "test job result: ${{ needs.test.result }}" >&2
+            exit 1
+          fi
