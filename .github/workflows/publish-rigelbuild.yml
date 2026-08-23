@@ -22,6 +22,13 @@ jobs:
     name: Publish
     if: github.repository_owner == 'RigelBuild'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The repo root .npmrc sets provenance=true, so `pnpm publish` generates
+      # an npm provenance attestation, which is signed via GitHub OIDC and needs
+      # id-token: write (mirrors upstream release.yml). The NPM_TOKEN below still
+      # authenticates the upload — provenance is an attestation, not the auth.
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -58,5 +65,10 @@ jobs:
         run: pnpm publish --filter @rigelbuild/solid-virtual --tag "$TAG" --no-git-checks # zizmor: ignore[use-trusted-publishing]
         env:
           TAG: ${{ steps.disttag.outputs.tag }}
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # pnpm authenticates via a per-registry _authToken, not the legacy
+          # global `token` (NPM_CONFIG_TOKEN) which registry.npmjs.org no longer
+          # accepts, nor NODE_AUTH_TOKEN (a setup-node convention pnpm doesn't
+          # read). The URL-scoped env var is honored natively by pnpm (>=11.6),
+          # is file-free, and can't be redirected to another host since the
+          # registry is baked into the key.
+          pnpm_config_//registry.npmjs.org/:_authToken: ${{ secrets.NPM_TOKEN }}

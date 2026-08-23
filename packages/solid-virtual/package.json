@@ -1,6 +1,9 @@
 {
   "name": "@rigelbuild/solid-virtual",
   "version": "3.0.0-rc.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "Headless UI for virtualizing scrollable elements in Solid",
   "author": "Tanner Linsley",
   "license": "MIT",
