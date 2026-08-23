@@ -23,12 +23,11 @@ jobs:
     if: github.repository_owner == 'RigelBuild'
     runs-on: ubuntu-latest
     permissions:
+      # No provenance attestation is generated (see the publish step's
+      # pnpm_config_provenance=false), so no OIDC token is minted and the job
+      # needs no id-token:write — read is the whole grant, matching the
+      # @rigelbuild/solid-markdown precedent. Auth is the NPM_TOKEN secret.
       contents: read
-      # The repo root .npmrc sets provenance=true, so `pnpm publish` generates
-      # an npm provenance attestation, which is signed via GitHub OIDC and needs
-      # id-token: write (mirrors upstream release.yml). The NPM_TOKEN below still
-      # authenticates the upload — provenance is an attestation, not the auth.
-      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -72,3 +71,15 @@ jobs:
           # is file-free, and can't be redirected to another host since the
           # registry is baked into the key.
           pnpm_config_//registry.npmjs.org/:_authToken: ${{ secrets.NPM_TOKEN }}
+          # Force npm provenance OFF for this publish. The fork's Solid-2 branch
+          # keeps repository.url -> the upstream TanStack/virtual repo (frozen
+          # in DL-015: honest for a fork), but provenance attestation requires
+          # repository.url to match the *publishing* repo (RigelBuild/virtual)
+          # or the registry rejects the upload (422). We publish from a fork
+          # with an upstream-pointed manifest and no provenance — same posture
+          # as the @rigelbuild/solid-markdown precedent. pnpm >=11 ignores a
+          # `provenance` key in any .npmrc (only auth/network keys are read), so
+          # the repo-root .npmrc's provenance=true is already inert here; this
+          # env var (pnpm_config_*, the only surface pnpm reads it from) makes
+          # OFF explicit and version-proof rather than relying on that default.
+          pnpm_config_provenance: 'false'
