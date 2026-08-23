@@ -54,32 +54,32 @@ jobs:
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
       - name: Publish @rigelbuild/solid-virtual
-        # dist-tag passed through env, not interpolated into the run string, so
-        # the `${{ }}` expansion can't reach the shell command line (zizmor
-        # template-injection). Auth is the NPM_TOKEN secret, not npm trusted
-        # publishing (OIDC): the token is provisioned + custodied via the orion
-        # Pulumi github stack per the frozen design record (rigelbuild-solid-
-        # virtual-publish, DL-015), so the use-trusted-publishing audit is
-        # deliberately ignored on the publish line below.
-        run: pnpm publish --filter @rigelbuild/solid-virtual --tag "$TAG" --no-git-checks # zizmor: ignore[use-trusted-publishing]
+        # Auth is the NPM_TOKEN secret (custodied via the orion Pulumi github
+        # stack per DL-015), not OIDC trusted publishing — hence the ignored
+        # use-trusted-publishing audit on the publish line. pnpm 11 reads the
+        # per-registry _authToken from the user-level ~/.npmrc; the token is
+        # written there rather than passed as a config env var because a
+        # URL-scoped pnpm config key (//registry.npmjs.org/:_authToken) cannot
+        # be a GitHub Actions env-var name (names are [A-Za-z0-9_] only), so
+        # the value would never reach pnpm and the scoped publish would go out
+        # unauthenticated — which npm answers with a 404 on the PUT. The token
+        # is passed via the clean-named NPM_TOKEN env and never interpolated
+        # into the command line (zizmor template-injection).
+        run: | # zizmor: ignore[use-trusted-publishing]
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::NPM_TOKEN secret is empty — cannot authenticate the publish" >&2
+            exit 1
+          fi
+          # Create the user npmrc mode-600 at creation (umask in a subshell), so
+          # the token file is never briefly world-readable.
+          ( umask 077 && printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$HOME/.npmrc" )
+          pnpm publish --filter @rigelbuild/solid-virtual --tag "$TAG" --no-git-checks
         env:
           TAG: ${{ steps.disttag.outputs.tag }}
-          # pnpm authenticates via a per-registry _authToken, not the legacy
-          # global `token` (NPM_CONFIG_TOKEN) which registry.npmjs.org no longer
-          # accepts, nor NODE_AUTH_TOKEN (a setup-node convention pnpm doesn't
-          # read). The URL-scoped env var is honored natively by pnpm (>=11.6),
-          # is file-free, and can't be redirected to another host since the
-          # registry is baked into the key.
-          pnpm_config_//registry.npmjs.org/:_authToken: ${{ secrets.NPM_TOKEN }}
-          # Force npm provenance OFF for this publish. The fork's Solid-2 branch
-          # keeps repository.url -> the upstream TanStack/virtual repo (frozen
-          # in DL-015: honest for a fork), but provenance attestation requires
-          # repository.url to match the *publishing* repo (RigelBuild/virtual)
-          # or the registry rejects the upload (422). We publish from a fork
-          # with an upstream-pointed manifest and no provenance — same posture
-          # as the @rigelbuild/solid-markdown precedent. pnpm >=11 ignores a
-          # `provenance` key in any .npmrc (only auth/network keys are read), so
-          # the repo-root .npmrc's provenance=true is already inert here; this
-          # env var (pnpm_config_*, the only surface pnpm reads it from) makes
-          # OFF explicit and version-proof rather than relying on that default.
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Force npm provenance OFF: repository.url points at upstream
+          # TanStack/virtual per DL-015, which would 422 a provenance upload
+          # from the RigelBuild/virtual publishing repo. pnpm 11 reads
+          # provenance only from this env key, never from any .npmrc; the
+          # clean name exports fine in Actions.
           pnpm_config_provenance: 'false'
