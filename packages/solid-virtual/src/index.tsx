@@ -9,13 +9,13 @@ import {
 } from '@tanstack/virtual-core'
 
 import {
-  createComputed,
+  createEffect,
   createSignal,
-  mergeProps,
-  onCleanup,
-  onMount,
+  createStore,
+  merge,
+  onSettled,
+  reconcile,
 } from 'solid-js'
-import { createStore, reconcile } from 'solid-js/store'
 import type { PartialKeys, VirtualizerOptions } from '@tanstack/virtual-core'
 
 export * from '@tanstack/virtual-core'
@@ -27,7 +27,7 @@ function createVirtualizerBase<
   options: VirtualizerOptions<TScrollElement, TItemElement>,
 ): Virtualizer<TScrollElement, TItemElement> {
   const resolvedOptions: VirtualizerOptions<TScrollElement, TItemElement> =
-    mergeProps(options)
+    merge(options)
 
   const instance = new Virtualizer<TScrollElement, TItemElement>(
     resolvedOptions,
@@ -36,7 +36,13 @@ function createVirtualizerBase<
   const [virtualItems, setVirtualItems] = createStore(
     instance.getVirtualItems(),
   )
-  const [totalSize, setTotalSize] = createSignal(instance.getTotalSize())
+  const [totalSize, setTotalSize] = createSignal(instance.getTotalSize(), {
+    // virtual-core drives these bridge signals from its imperative API
+    // (resizeItem, measure, scroll handlers), which consumers may call from
+    // an owned scope. The write is the adapter's own internal notify bridge,
+    // not app state escaping a computation, so opt in to owned writes.
+    ownedWrite: true,
+  })
 
   const handler = {
     get(
@@ -57,34 +63,41 @@ function createVirtualizerBase<
   const virtualizer = new Proxy(instance, handler)
   virtualizer.setOptions(resolvedOptions)
 
-  onMount(() => {
+  onSettled(() => {
     const cleanup = virtualizer._didMount()
     virtualizer._willUpdate()
-    onCleanup(cleanup)
+    return cleanup
   })
 
-  createComputed(() => {
-    virtualizer.setOptions(
-      mergeProps(resolvedOptions, options, {
-        onChange: (
-          instance: Virtualizer<TScrollElement, TItemElement>,
-          sync: boolean,
-        ) => {
-          instance._willUpdate()
-          setVirtualItems(
-            reconcile(instance.getVirtualItems(), {
-              key: 'index',
-            }),
-          )
-          setTotalSize(instance.getTotalSize())
-          options.onChange?.(instance, sync)
-        },
-      }),
-    )
-    virtualizer._willUpdate()
-    setVirtualItems(reconcile(instance.getVirtualItems(), { key: 'index' }))
-    setTotalSize(instance.getTotalSize())
-  })
+  createEffect(
+    () => {
+      // Compute phase: (re)apply options, tracking every reactive getter
+      // read inside `setOptions`. No store/signal writes happen here — those
+      // are forbidden inside a reactive scope in v2. The `onChange` callback
+      // installed below fires from event/observer context, where writes are
+      // legal.
+      virtualizer.setOptions(
+        merge(resolvedOptions, options, {
+          onChange: (
+            instance: Virtualizer<TScrollElement, TItemElement>,
+            sync: boolean,
+          ) => {
+            instance._willUpdate()
+            setVirtualItems(reconcile(instance.getVirtualItems(), 'index'))
+            setTotalSize(instance.getTotalSize())
+            options.onChange?.(instance, sync)
+          },
+        }),
+      )
+    },
+    () => {
+      // Apply phase: run the layout update and push the results into the
+      // store/signal. Writes are permitted here.
+      virtualizer._willUpdate()
+      setVirtualItems(reconcile(instance.getVirtualItems(), 'index'))
+      setTotalSize(instance.getTotalSize())
+    },
+  )
 
   return virtualizer
 }
@@ -99,7 +112,7 @@ export function createVirtualizer<
   >,
 ): Virtualizer<TScrollElement, TItemElement> {
   return createVirtualizerBase<TScrollElement, TItemElement>(
-    mergeProps(
+    merge(
       {
         observeElementRect: observeElementRect,
         observeElementOffset: observeElementOffset,
@@ -120,7 +133,7 @@ export function createWindowVirtualizer<TItemElement extends Element>(
   >,
 ): Virtualizer<Window, TItemElement> {
   return createVirtualizerBase<Window, TItemElement>(
-    mergeProps(
+    merge(
       {
         getScrollElement: () =>
           typeof document !== 'undefined' ? window : null,

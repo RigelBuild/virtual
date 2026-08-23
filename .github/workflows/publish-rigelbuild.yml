@@ -1,0 +1,85 @@
+name: Publish (RigelBuild)
+
+# Fork-owned publish for @rigelbuild/solid-virtual. Upstream release.yml is
+# gated `if: github.repository_owner == 'TanStack'` and stays untouched
+# (upstreamable); this workflow is gated to the fork owner and publishes only
+# the one renamed package via a direct filtered `pnpm publish`, computing the
+# dist-tag from the version (prerelease -> next, GA -> latest). It reuses the
+# monorepo install/build/test tooling; only the changesets *publish step* is
+# bypassed, since it cannot scope a single renamed package's publish here.
+
+permissions:
+  contents: read
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Publish
+    if: github.repository_owner == 'RigelBuild'
+    runs-on: ubuntu-latest
+    permissions:
+      # No provenance attestation is generated (see the publish step's
+      # pnpm_config_provenance=false), so no OIDC token is minted and the job
+      # needs no id-token:write — read is the whole grant, matching the
+      # @rigelbuild/solid-markdown precedent. Auth is the NPM_TOKEN secret.
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3 # main
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install chromium
+      - name: Build and test the workspace
+        # `test:ci` = nx run-many (not `affected`): a tag push has no affected
+        # base, so `affected` would run nothing and could publish an unbuilt
+        # dist. run-many runs every package's checks + the `build` target in
+        # dependency order (virtual-core before solid-virtual), so the dist
+        # this job publishes is freshly built and verified. Mirrors pr.yml.
+        run: pnpm run test:ci
+      - name: Resolve npm dist-tag from version
+        id: disttag
+        run: |
+          version=$(node -p "require('./packages/solid-virtual/package.json').version")
+          if [[ "$version" == *-* ]]; then
+            echo "tag=next" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish @rigelbuild/solid-virtual
+        # dist-tag passed through env, not interpolated into the run string, so
+        # the `${{ }}` expansion can't reach the shell command line (zizmor
+        # template-injection). Auth is the NPM_TOKEN secret, not npm trusted
+        # publishing (OIDC): the token is provisioned + custodied via the orion
+        # Pulumi github stack per the frozen design record (rigelbuild-solid-
+        # virtual-publish, DL-015), so the use-trusted-publishing audit is
+        # deliberately ignored on the publish line below.
+        run: pnpm publish --filter @rigelbuild/solid-virtual --tag "$TAG" --no-git-checks # zizmor: ignore[use-trusted-publishing]
+        env:
+          TAG: ${{ steps.disttag.outputs.tag }}
+          # pnpm authenticates via a per-registry _authToken, not the legacy
+          # global `token` (NPM_CONFIG_TOKEN) which registry.npmjs.org no longer
+          # accepts, nor NODE_AUTH_TOKEN (a setup-node convention pnpm doesn't
+          # read). The URL-scoped env var is honored natively by pnpm (>=11.6),
+          # is file-free, and can't be redirected to another host since the
+          # registry is baked into the key.
+          pnpm_config_//registry.npmjs.org/:_authToken: ${{ secrets.NPM_TOKEN }}
+          # Force npm provenance OFF for this publish. The fork's Solid-2 branch
+          # keeps repository.url -> the upstream TanStack/virtual repo (frozen
+          # in DL-015: honest for a fork), but provenance attestation requires
+          # repository.url to match the *publishing* repo (RigelBuild/virtual)
+          # or the registry rejects the upload (422). We publish from a fork
+          # with an upstream-pointed manifest and no provenance — same posture
+          # as the @rigelbuild/solid-markdown precedent. pnpm >=11 ignores a
+          # `provenance` key in any .npmrc (only auth/network keys are read), so
+          # the repo-root .npmrc's provenance=true is already inert here; this
+          # env var (pnpm_config_*, the only surface pnpm reads it from) makes
+          # OFF explicit and version-proof rather than relying on that default.
+          pnpm_config_provenance: 'false'
