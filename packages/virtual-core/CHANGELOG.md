@@ -1,5 +1,41 @@
 # @tanstack/virtual-core
 
+## 3.18.0
+
+### Minor Changes
+
+- [#1300](https://github.com/TanStack/virtual/pull/1300) [`43675bc`](https://github.com/TanStack/virtual/commit/43675bc42e3043cb2cea4dba015df077d9813602) - feat(virtual-core): add `cancelScroll()` to stop an in-flight `scrollToIndex` / `scrollToOffset` / `scrollBy` / `scrollToEnd` from correcting toward its target, so a user gesture can take over the viewport ([#1285](https://github.com/TanStack/virtual/issues/1285))
+
+### Patch Changes
+
+- [#1276](https://github.com/TanStack/virtual/pull/1276) [`9df47a3`](https://github.com/TanStack/virtual/commit/9df47a3215f3fb3d182442316d058e2a96696e4f) - Fix `scrollToIndex(last, { align: 'end' })` overshooting the last item by `paddingEnd`; it now respects `scrollPaddingEnd` like other end-aligned items. To scroll to the very bottom including `paddingEnd`, use `scrollToEnd()`.
+
+- [#1293](https://github.com/TanStack/virtual/pull/1293) [`c644f10`](https://github.com/TanStack/virtual/commit/c644f1096c9f4d8221d92862afdc9316b17df62a) - fix(virtual-core): don't cache a 0 size when `measureElement` receives a node that isn't attached to the document yet
+
+- [#1294](https://github.com/TanStack/virtual/pull/1294) [`2a631f4`](https://github.com/TanStack/virtual/commit/2a631f46f4366227533f45604af3db8e60deb70f) - Keep scrollToIndex reconciliation active until pending ResizeObserver measurements can update its target, including when useAnimationFrameWithResizeObserver is enabled. Respect an external scroll away from a reached target during this settling period.
+
+## 3.17.11
+
+### Patch Changes
+
+- [#1284](https://github.com/TanStack/virtual/pull/1284) [`06d1b6b`](https://github.com/TanStack/virtual/commit/06d1b6bf8f61f203556a8fb21a6639600c9751a0) - Read the current scroll offset when the debounced scroll-end fallback fires so measurement adjustments made since the last browser scroll event are not overwritten by stale state.
+
+- [#1248](https://github.com/TanStack/virtual/pull/1248) [`2c0a0ea`](https://github.com/TanStack/virtual/commit/2c0a0ea101c360ea15832c060008aa163cae2f7c) - Keep a travelling smooth `scrollToIndex` alive when content is prepended. With `anchorTo: 'end'`, the prepend anchor sync wrote `scrollTop` instantly, which cancelled the browser's smooth animation and left the scroll stranded partway; Chromium drops a smooth request re-issued right after such a cancel, so it could not be resumed. The sync is now skipped while a smooth programmatic scroll is still in flight, and the animation continues to its recomputed target. A smooth scroll that has already landed still receives the anchor sync.
+
+## 3.17.10
+
+### Patch Changes
+
+- [#1272](https://github.com/TanStack/virtual/pull/1272) [`ab3278c`](https://github.com/TanStack/virtual/commit/ab3278cbe7b9a895ecdde263ad3c55c868b85d74) - Keep an end-pinned virtualizer following appended items when older items are trimmed in the same update and the item count does not increase. Recognize ordered, overlapping windows while preserving reading anchors for users who have scrolled away from the end.
+
+  Preserve item keys in the lazy measurement cache so a stable `getItemKey` callback reading mutable data cannot change the identity of previously measured rows.
+
+## 3.17.9
+
+### Patch Changes
+
+- [#1260](https://github.com/TanStack/virtual/pull/1260) [`4a0adf3`](https://github.com/TanStack/virtual/commit/4a0adf3e3ba46968e0e6ba66471253e467babe55) - Recover the bottom pin when the browser clamps an end-anchored scroll compensation write. `resizeItem` compensates a size change by writing `scrollTop` before the consumer has committed the new total size, so when the grown item does not itself extend the scroll range the browser clamps the write to the old maximum and the viewport is left short of the end with no scroll event to correct it. Two cases hit this: `paddingEnd > 0` with a growing last item, where the overflowing item only extends `scrollHeight` to its own end and the clamp lands exactly `paddingEnd` short ([#1258](https://github.com/TanStack/virtual/issues/1258)); and a row above the last one growing while the last row keeps its size, under `directDomUpdates` ([#1266](https://github.com/TanStack/virtual/issues/1266)). A compensation write whose target exceeds the scroll maximum at write time is now recorded as clamped and re-issued once the sizer has grown — right after `notify` for consumers that size the container synchronously in `onChange`, and from `_willUpdate` for consumers that size it during a render. The clamped read-back keeps the retry pending; any other scroll event cancels it, so a user reading history is never yanked.
+
 ## 3.17.8
 
 ### Patch Changes

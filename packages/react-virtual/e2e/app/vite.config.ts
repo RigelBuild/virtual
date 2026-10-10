@@ -11,11 +11,13 @@ export default defineConfig({
         scroll: path.resolve(__dirname, 'scroll/index.html'),
         'scroll-anchor': path.resolve(__dirname, 'scroll-anchor/index.html'),
         chat: path.resolve(__dirname, 'chat/index.html'),
+        'chat-resize': path.resolve(__dirname, 'chat-resize/index.html'),
         'measure-element': path.resolve(
           __dirname,
           'measure-element/index.html',
         ),
         'smooth-scroll': path.resolve(__dirname, 'smooth-scroll/index.html'),
+        'smooth-prepend': path.resolve(__dirname, 'smooth-prepend/index.html'),
         'stale-index': path.resolve(__dirname, 'stale-index/index.html'),
         'direct-dom-updates': path.resolve(
           __dirname,

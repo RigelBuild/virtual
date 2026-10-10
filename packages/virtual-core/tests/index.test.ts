@@ -415,12 +415,244 @@ test('scrollToIndex(0) should reconcile correctly', () => {
   const calledOffset = scrollToFn.mock.calls[0]![0]
   expect(calledOffset).toBe(0)
 
-  // Flush rAF — reconcileScroll should run and not bail
-  // It should eventually clear scrollState (settle)
-  rafCallbacks.forEach((cb) => cb(0))
+  // The first frame leaves room for pending ResizeObserver measurements.
+  rafCallbacks.shift()!(0)
+  expect(virtualizer['scrollState']).not.toBeNull()
+  rafCallbacks.shift()!(0)
 
   // scrollState should be cleared after settling
   expect(virtualizer['scrollState']).toBeNull()
+})
+
+test.each([false, true])(
+  'scrollToIndex waits for pending measurements (deferred observer: %s)',
+  (useAnimationFrameWithResizeObserver) => {
+    const { rafCallbacks, mockScrollElement, scrollToFn } =
+      createMockEnvironment()
+    const virtualizer = createVirtualizer(mockScrollElement, scrollToFn)
+    virtualizer.setOptions({
+      ...virtualizer.options,
+      useAnimationFrameWithResizeObserver,
+    })
+    virtualizer._willUpdate()
+    virtualizer.getVirtualItems()
+    virtualizer.resizeItem(98, 60)
+    virtualizer.getVirtualItems()
+    virtualizer.scrollOffset = 4400
+    scrollToFn.mockClear()
+
+    virtualizer.scrollToIndex(99, { align: 'end' })
+    expect(scrollToFn).toHaveBeenLastCalledWith(
+      4400,
+      expect.anything(),
+      virtualizer,
+    )
+
+    // rAF runs before ResizeObserver. An optional rAF wrapper defers the
+    // measurement until after the next reconciliation callback as well.
+    rafCallbacks.shift()!(0)
+    if (useAnimationFrameWithResizeObserver) {
+      rafCallbacks.shift()?.(0)
+    }
+    virtualizer.resizeItem(98, 90)
+    Object.defineProperty(mockScrollElement, 'scrollHeight', { value: 5030 })
+    virtualizer.getVirtualItems()
+    rafCallbacks.shift()?.(0)
+
+    expect(scrollToFn).toHaveBeenLastCalledWith(
+      4430,
+      expect.anything(),
+      virtualizer,
+    )
+
+    virtualizer.scrollOffset = 4430
+    // Reconciliation must still retire once the new target is stable.
+    for (let frame = 0; frame < 3; frame++) {
+      rafCallbacks.shift()?.(0)
+    }
+    expect(virtualizer['scrollState']).toBeNull()
+    expect(rafCallbacks).toHaveLength(0)
+  },
+)
+
+test.each([false, true])(
+  'a new scroll away from a reached index target cancels reconciliation (retargeted: %s)',
+  (retargeted) => {
+    const { rafCallbacks, mockScrollElement, scrollToFn } =
+      createMockEnvironment()
+    const virtualizer = createVirtualizer(mockScrollElement, scrollToFn)
+    let onScroll!: (offset: number, isScrolling: boolean) => void
+    virtualizer.setOptions({
+      ...virtualizer.options,
+      observeElementOffset: (_instance, callback) => {
+        onScroll = callback
+        callback(0, false)
+        return () => {}
+      },
+    })
+    virtualizer._willUpdate()
+    virtualizer.getVirtualItems()
+    virtualizer.scrollOffset = 4400
+    scrollToFn.mockClear()
+
+    virtualizer.scrollToIndex(99, { align: 'end' })
+    rafCallbacks.shift()!(0)
+    if (retargeted) {
+      virtualizer.resizeItem(97, 80)
+      Object.defineProperty(mockScrollElement, 'scrollHeight', {
+        value: 5030,
+        configurable: true,
+      })
+      virtualizer.getVirtualItems()
+      rafCallbacks.shift()!(0)
+      // The target changed before its write produced a scroll event. Arrival
+      // at the previous target must still let an external scroll cancel it.
+    }
+    const writes = scrollToFn.mock.calls.length
+    onScroll(2000, true)
+
+    // Measurements must not pull a reader back to the old target after they leave it.
+    virtualizer.resizeItem(98, 80)
+    Object.defineProperty(mockScrollElement, 'scrollHeight', {
+      value: retargeted ? 5060 : 5030,
+    })
+    virtualizer.getVirtualItems()
+    rafCallbacks.shift()!(0)
+
+    expect(virtualizer['scrollState']).toBeNull()
+    expect(virtualizer.scrollOffset).toBe(2000)
+    expect(scrollToFn).toHaveBeenCalledTimes(writes)
+  },
+)
+
+test.each(['auto', 'smooth'] as const)(
+  'keeps an index scroll active before reaching its target (%s)',
+  (behavior) => {
+    const { mockScrollElement, scrollToFn } = createMockEnvironment()
+    const virtualizer = createVirtualizer(mockScrollElement, scrollToFn)
+    let onScroll!: (offset: number, isScrolling: boolean) => void
+    virtualizer.setOptions({
+      ...virtualizer.options,
+      observeElementOffset: (_instance, callback) => {
+        onScroll = callback
+        callback(0, false)
+        return () => {}
+      },
+    })
+    virtualizer._willUpdate()
+    virtualizer.getVirtualItems()
+    virtualizer.scrollToIndex(99, { align: 'end', behavior })
+    onScroll(2000, true)
+
+    expect(virtualizer['scrollState']).not.toBeNull()
+  },
+)
+
+test.each([30, 3000])(
+  'measurement compensation does not cancel a reached index target (growth: %s)',
+  (growth) => {
+    const { rafCallbacks, mockScrollElement, scrollToFn } =
+      createMockEnvironment()
+    scrollToFn.mockImplementation((offset, { adjustments }) => {
+      mockScrollElement.scrollTop = Math.min(4400, offset + (adjustments ?? 0))
+    })
+    const virtualizer = createVirtualizer(mockScrollElement, scrollToFn)
+    let onScroll!: (offset: number, isScrolling: boolean) => void
+    virtualizer.setOptions({
+      ...virtualizer.options,
+      observeElementOffset: (_instance, callback) => {
+        onScroll = callback
+        callback(0, false)
+        return () => {}
+      },
+    })
+    virtualizer._willUpdate()
+    virtualizer.getVirtualItems()
+    virtualizer.scrollOffset = 2500
+    virtualizer.scrollToIndex(50, { align: 'start' })
+    rafCallbacks.shift()!(0)
+
+    // The browser may clamp this adjustment until the consumer grows the sizer.
+    virtualizer.resizeItem(0, 50 + growth)
+    onScroll(mockScrollElement.scrollTop, true)
+
+    expect(virtualizer['scrollState']).not.toBeNull()
+  },
+)
+
+test('a browser clamp to the new max does not cancel a reached scrollToEnd', () => {
+  const { rafCallbacks, mockScrollElement, scrollToFn } =
+    createMockEnvironment()
+  const virtualizer = createVirtualizer(mockScrollElement, scrollToFn)
+  let onScroll!: (offset: number, isScrolling: boolean) => void
+  virtualizer.setOptions({
+    ...virtualizer.options,
+    paddingEnd: 40,
+    observeElementOffset: (_instance, callback) => {
+      onScroll = callback
+      callback(0, false)
+      return () => {}
+    },
+  })
+  Object.defineProperty(mockScrollElement, 'scrollHeight', {
+    value: 5040,
+    configurable: true,
+  })
+  virtualizer._willUpdate()
+  virtualizer.getVirtualItems()
+  virtualizer.scrollOffset = 4440
+
+  // Already at the end, so the target counts as reached straight away.
+  virtualizer.scrollToEnd()
+  onScroll(4440, false)
+
+  // The last row shrinks and the browser clamps scrollTop to the new max.
+  // That is the scrollToEnd target (paddingEnd included), not a scroll away.
+  virtualizer.resizeItem(99, 20)
+  Object.defineProperty(mockScrollElement, 'scrollHeight', { value: 5010 })
+  onScroll(4410, false)
+
+  expect(virtualizer['scrollState']).not.toBeNull()
+  rafCallbacks.shift()!(0)
+  expect(virtualizer['scrollState']?.lastTargetOffset).toBe(4410)
+})
+
+test('a smooth retarget is not cancelled by its own intermediate scroll events', () => {
+  const { rafCallbacks, mockScrollElement, scrollToFn } =
+    createMockEnvironment()
+  const virtualizer = createVirtualizer(mockScrollElement, scrollToFn)
+  let onScroll!: (offset: number, isScrolling: boolean) => void
+  virtualizer.setOptions({
+    ...virtualizer.options,
+    observeElementOffset: (_instance, callback) => {
+      onScroll = callback
+      callback(0, false)
+      return () => {}
+    },
+  })
+  virtualizer._willUpdate()
+  virtualizer.getVirtualItems()
+  virtualizer.scrollOffset = 4400
+
+  // Already at the end, so the target counts as reached straight away.
+  virtualizer.scrollToIndex(99, { align: 'end', behavior: 'smooth' })
+  rafCallbacks.shift()!(0)
+
+  // A visible row grows by more than a viewport, so the retarget stays smooth.
+  virtualizer.resizeItem(98, 1050)
+  Object.defineProperty(mockScrollElement, 'scrollHeight', { value: 6000 })
+  virtualizer.getVirtualItems()
+  rafCallbacks.shift()!(0)
+  expect(scrollToFn).toHaveBeenLastCalledWith(
+    5400,
+    { adjustments: undefined, behavior: 'smooth' },
+    virtualizer,
+  )
+
+  // The smooth scroll reports a position on its way to the new target.
+  onScroll(4800, true)
+
+  expect(virtualizer['scrollState']).not.toBeNull()
 })
 
 test('scrollToOffset should reconcile and clear scrollState', () => {
@@ -509,6 +741,73 @@ test('cleanup should cancel pending RAF and clear scrollState', () => {
   expect(virtualizer['scrollState']).toBeNull()
   expect(virtualizer['rafId']).toBeNull()
   expect(mockWindow.cancelAnimationFrame).toHaveBeenCalled()
+})
+
+test('cancelScroll stops reconciling toward the old target (#1285)', () => {
+  const { rafCallbacks, mockWindow, mockScrollElement, scrollToFn } =
+    createMockEnvironment()
+  const virtualizer = createVirtualizer(mockScrollElement, scrollToFn)
+
+  virtualizer._willUpdate()
+  virtualizer.scrollToIndex(50, { align: 'start' })
+
+  expect(virtualizer['scrollState']).not.toBeNull()
+  expect(virtualizer['rafId']).not.toBeNull()
+
+  // The user takes over mid-travel.
+  virtualizer.cancelScroll()
+
+  expect(virtualizer['scrollState']).toBeNull()
+  expect(virtualizer['rafId']).toBeNull()
+  expect(mockWindow.cancelAnimationFrame).toHaveBeenCalled()
+
+  // A measurement above the old target would move it; without the cancel,
+  // reconcile chases the new target and yanks the viewport back.
+  scrollToFn.mockClear()
+  virtualizer.resizeItem(10, 200)
+  rafCallbacks.forEach((cb) => cb(0))
+
+  expect(scrollToFn).not.toHaveBeenCalled()
+})
+
+test('cancelScroll restores size-change compensation after a smooth scroll', () => {
+  const { mockScrollElement, scrollToFn } = createMockEnvironment()
+  const virtualizer = createVirtualizer(mockScrollElement, scrollToFn)
+
+  virtualizer._willUpdate()
+  virtualizer.scrollOffset = 1000
+  virtualizer.scrollToIndex(50, { behavior: 'smooth' })
+  virtualizer.cancelScroll()
+  scrollToFn.mockClear()
+
+  // First measurement of an item above the fold is compensated again; while
+  // the smooth scrollState was active it would have been skipped.
+  virtualizer.resizeItem(0, 80)
+
+  expect(scrollToFn).toHaveBeenCalledWith(
+    1000,
+    expect.objectContaining({ adjustments: 30 }),
+    virtualizer,
+  )
+})
+
+test('cancelScroll is a no-op when no scroll is in flight', () => {
+  const { rafCallbacks, mockScrollElement, scrollToFn } =
+    createMockEnvironment()
+  const virtualizer = createVirtualizer(mockScrollElement, scrollToFn)
+
+  virtualizer._willUpdate()
+  scrollToFn.mockClear()
+
+  expect(() => virtualizer.cancelScroll()).not.toThrow()
+  expect(scrollToFn).not.toHaveBeenCalled()
+
+  // A later scroll command still works normally.
+  virtualizer.scrollToOffset(200)
+  expect(virtualizer['scrollState']).not.toBeNull()
+  virtualizer.scrollOffset = 200
+  rafCallbacks.forEach((cb) => cb(0))
+  expect(virtualizer['scrollState']).toBeNull()
 })
 
 // ─── resizeItem / measurement cache invalidation ─────────────────────────────
@@ -851,6 +1150,103 @@ test('RO callback should remove disconnected node from elementsCache', () => {
 
   // elementsCache should no longer contain the disconnected node
   expect(virtualizer.elementsCache.has(3)).toBe(false)
+})
+
+test('measureElement should not cache a 0 size for a node that is not connected yet', () => {
+  // Vue calls function refs during patch, before the parent is inserted,
+  // so measureElement can receive a node whose offsetHeight is still 0.
+  let roCallback: ResizeObserverCallback | null = null
+  const observe = vi.fn()
+  const MockResizeObserver = vi.fn(function (cb: ResizeObserverCallback) {
+    roCallback = cb
+    return {
+      observe,
+      unobserve: vi.fn(),
+      disconnect: vi.fn(),
+    }
+  })
+
+  const mockWindow = {
+    requestAnimationFrame: vi.fn(),
+    cancelAnimationFrame: vi.fn(),
+    performance: { now: () => Date.now() },
+    ResizeObserver: MockResizeObserver,
+  }
+
+  const mockScrollElement = {
+    scrollTop: 0,
+    scrollLeft: 0,
+    scrollWidth: 1000,
+    scrollHeight: 5000,
+    offsetWidth: 400,
+    offsetHeight: 600,
+    ownerDocument: { defaultView: mockWindow },
+  } as unknown as HTMLDivElement
+
+  const virtualizer = new Virtualizer({
+    count: 10,
+    estimateSize: () => 50,
+    getScrollElement: () => mockScrollElement,
+    scrollToFn: vi.fn(),
+    observeElementRect: (_inst, cb) => {
+      cb({ width: 400, height: 600 })
+      return () => {}
+    },
+    observeElementOffset: (_inst, cb) => {
+      cb(0, false)
+      return () => {}
+    },
+  })
+
+  virtualizer._willUpdate()
+
+  const nodes = [0, 1, 2].map(
+    (index) =>
+      ({
+        getAttribute: (name: string) =>
+          name === 'data-index' ? String(index) : null,
+        isConnected: false,
+        offsetHeight: 0,
+        offsetWidth: 0,
+        setAttribute: vi.fn(),
+      }) as unknown as HTMLElement,
+  )
+
+  nodes.forEach((node) => virtualizer.measureElement(node))
+
+  // Observed, but the 0 isn't cached: items keep their estimated positions.
+  expect(observe).toHaveBeenCalledTimes(3)
+  expect(virtualizer.elementsCache.get(1)).toBe(nodes[1])
+  expect(
+    virtualizer
+      .getVirtualItems()
+      .slice(0, 3)
+      .map((item) => item.start),
+  ).toEqual([0, 50, 100])
+
+  nodes.forEach((node) => {
+    ;(node as any).isConnected = true
+  })
+  roCallback!(
+    nodes.map(
+      (node) =>
+        ({
+          target: node,
+          contentRect: { height: 60, width: 400 } as DOMRectReadOnly,
+          borderBoxSize: [{ blockSize: 60, inlineSize: 400 }],
+          contentBoxSize: [{ blockSize: 60, inlineSize: 400 }],
+          devicePixelContentBoxSize: [{ blockSize: 60, inlineSize: 400 }],
+        }) as ResizeObserverEntry,
+    ),
+    {} as ResizeObserver,
+  )
+
+  expect(
+    virtualizer
+      .getVirtualItems()
+      .slice(0, 3)
+      .map((item) => item.start),
+  ).toEqual([0, 60, 120])
 })
 
 test('RO callback should not delete cache entry if node was replaced by React', () => {
@@ -1435,6 +1831,44 @@ test('lazy fast path: same item read twice returns identical reference (cache wo
   const b = m[5]
   expect(a).toBe(b)
 })
+
+test.each([
+  { name: 'initial build', resizeIndex: null },
+  { name: 'partial rebuild', resizeIndex: 2 },
+])(
+  'lazy fast path: preserves unread item keys after $name',
+  ({ resizeIndex }) => {
+    const messages = ['a', 'b', 'c', 'd']
+    const v = new Virtualizer({
+      count: messages.length,
+      estimateSize: () => 50,
+      getItemKey: (index) => messages[index]!,
+      getScrollElement: () => null,
+      scrollToFn: vi.fn(),
+      observeElementRect: vi.fn(),
+      observeElementOffset: vi.fn(),
+    })
+    expect(v.getTotalSize()).toBe(200)
+
+    if (resizeIndex !== null) {
+      v.resizeItem(resizeIndex, 80)
+      expect(v.getTotalSize()).toBe(230)
+    }
+
+    // The old layout is still needed while setOptions compares the two lists.
+    messages.splice(0, 1)
+    messages.push('e')
+
+    expect(v.getVirtualItemForOffset(50)).toEqual({
+      index: 1,
+      key: 'b',
+      start: 50,
+      size: 50,
+      end: 100,
+      lane: 0,
+    })
+  },
+)
 
 test('lazy fast path: out-of-range access returns undefined', () => {
   const v = new Virtualizer({
@@ -2879,6 +3313,7 @@ function createChatVirtualizer({
   itemSize = 50,
   followOnAppend = false,
   threshold = 1,
+  paddingEnd = 0,
 }: {
   messages: Array<{ id: string }>
   offset: number
@@ -2886,13 +3321,16 @@ function createChatVirtualizer({
   itemSize?: number
   followOnAppend?: boolean | 'auto' | 'smooth' | 'instant'
   threshold?: number
+  paddingEnd?: number
 }) {
   let currentMessages = messages
   const scrollToFn = vi.fn()
+  let offsetCb: ((offset: number, isScrolling: boolean) => void) | null = null
   const scrollElement = {
     scrollTop: offset,
     scrollLeft: 0,
-    scrollHeight: messages.length * itemSize,
+    // The sizer is `getTotalSize()`, which includes paddingEnd.
+    scrollHeight: messages.length * itemSize + paddingEnd,
     scrollWidth: 1000,
     clientHeight: viewportSize,
     clientWidth: 400,
@@ -2935,12 +3373,14 @@ function createChatVirtualizer({
         _instance: any,
         cb: (offset: number, isScrolling: boolean) => void,
       ) => {
+        offsetCb = cb
         cb(scrollElement.scrollTop, false)
         return () => {}
       },
       anchorTo: 'end' as const,
       followOnAppend,
       scrollEndThreshold: threshold,
+      paddingEnd,
     }
   }
 
@@ -2956,8 +3396,14 @@ function createChatVirtualizer({
     setMessages(nextMessages: Array<{ id: string }>) {
       currentMessages = nextMessages
       virtualizer.setOptions(makeOptions())
-      ;(scrollElement as any).scrollHeight = nextMessages.length * itemSize
+      ;(scrollElement as any).scrollHeight =
+        nextMessages.length * itemSize + paddingEnd
       virtualizer._willUpdate()
+    },
+    // Simulate the browser's scroll event after a write (or a gesture).
+    emitScroll(nextOffset: number, isScrolling = false) {
+      scrollElement.scrollTop = nextOffset
+      offsetCb?.(nextOffset, isScrolling)
     },
   }
 }
@@ -2990,6 +3436,34 @@ test('anchorTo:end does not yank a scrolled-up user when items append', () => {
   expect(scrollToFn).not.toHaveBeenCalled()
 })
 
+test('anchorTo:end preserves a reading anchor with a stable key callback', () => {
+  const messages = Array.from({ length: 20 }, (_, i) => ({ id: `m-${i}` }))
+  const { virtualizer, scrollToFn, emitScroll } = createChatVirtualizer({
+    messages,
+    offset: 400,
+    followOnAppend: false,
+  })
+  const readingKey = virtualizer.getVirtualItemForOffset(400)!.key
+  virtualizer.getVirtualItems()
+
+  for (let step = 1; step <= 2; step++) {
+    scrollToFn.mockClear()
+    messages.splice(0, 1)
+    messages.push({ id: `m-${19 + step}` })
+    // Keep the same callback; the old edge keys have not been read yet.
+    virtualizer.setOptions(virtualizer.options)
+    virtualizer._willUpdate()
+
+    const target = 400 - step * 50
+    expect(scrollToFn.mock.calls.at(-1)?.[0]).toBe(target)
+    emitScroll(target)
+    expect(virtualizer.getVirtualItemForOffset(target)?.key).toBe(readingKey)
+    for (const item of virtualizer.getVirtualItems()) {
+      expect(item.key).toBe(messages[item.index]!.id)
+    }
+  }
+})
+
 test('followOnAppend keeps an end-pinned user at the end when items append', () => {
   const messages = Array.from({ length: 5 }, (_, i) => ({ id: `m-${i}` }))
   const { setMessages, scrollToFn } = createChatVirtualizer({
@@ -3018,6 +3492,130 @@ test('followOnAppend accepts smooth behavior', () => {
 
   expect(scrollToFn).toHaveBeenCalledTimes(1)
   expect(scrollToFn.mock.calls[0]![1].behavior).toBe('smooth')
+})
+
+test.each([
+  { removed: 1, appended: 1, behavior: true as const },
+  { removed: 1, appended: 2, behavior: true as const },
+  { removed: 3, appended: 3, behavior: true as const },
+  { removed: 3, appended: 1, behavior: true as const },
+  { removed: 1, appended: 1, behavior: 'smooth' as const },
+])(
+  'followOnAppend follows a sliding window removing $removed and appending $appended with $behavior',
+  ({ removed, appended, behavior }) => {
+    const messages = Array.from({ length: 8 }, (_, i) => ({ id: `m-${i}` }))
+    const { setMessages, scrollToFn } = createChatVirtualizer({
+      messages,
+      offset: 200,
+      followOnAppend: behavior,
+    })
+    const nextMessages = [
+      ...messages.slice(removed),
+      ...Array.from({ length: appended }, (_, i) => ({ id: `m-${8 + i}` })),
+    ]
+
+    setMessages(nextMessages)
+
+    expect(scrollToFn).toHaveBeenCalledTimes(1)
+    expect(scrollToFn.mock.calls[0]![0]).toBe(nextMessages.length * 50 - 200)
+    expect(scrollToFn.mock.calls[0]![1].behavior).toBe(
+      behavior === true ? 'auto' : behavior,
+    )
+  },
+)
+
+test.each([
+  { offset: 100, followOnAppend: true, threshold: 1, target: 50 },
+  { offset: 200, followOnAppend: false, threshold: 1, target: 150 },
+  { offset: 195, followOnAppend: true, threshold: 4, target: 145 },
+  { offset: 196, followOnAppend: true, threshold: 4, target: 200 },
+])(
+  'followOnAppend respects offset $offset, enabled $followOnAppend and threshold $threshold for a sliding window',
+  ({ offset, followOnAppend, threshold, target }) => {
+    const messages = Array.from({ length: 8 }, (_, i) => ({ id: `m-${i}` }))
+    const { setMessages, scrollToFn } = createChatVirtualizer({
+      messages,
+      offset,
+      followOnAppend,
+      threshold,
+    })
+
+    setMessages([...messages.slice(1), { id: 'm-8' }])
+
+    expect(scrollToFn).toHaveBeenCalledTimes(1)
+    expect(scrollToFn.mock.calls[0]![0]).toBe(target)
+  },
+)
+
+test('followOnAppend stays pinned across sliding updates without scroll events', () => {
+  const messages = Array.from({ length: 8 }, (_, i) => ({ id: `m-${i}` }))
+  const { virtualizer, setMessages, scrollToFn } = createChatVirtualizer({
+    messages,
+    offset: 200,
+    followOnAppend: true,
+  })
+
+  // Equal-size append + trim leaves the DOM offset unchanged, so no scroll event fires.
+  setMessages([...messages.slice(1), { id: 'm-8' }])
+  expect(virtualizer.isAtEnd()).toBe(true)
+
+  setMessages([...messages.slice(2), { id: 'm-8' }, { id: 'm-9' }])
+  expect(virtualizer.isAtEnd()).toBe(true)
+  expect(scrollToFn.mock.calls.at(-1)![0]).toBe(200)
+})
+
+test('followOnAppend stays pinned with a stable key callback', () => {
+  const messages = Array.from({ length: 20 }, (_, i) => ({ id: `m-${i}` }))
+  const { virtualizer, scrollToFn } = createChatVirtualizer({
+    messages,
+    offset: 800,
+    followOnAppend: true,
+  })
+  virtualizer.getVirtualItems()
+
+  for (let step = 1; step <= 2; step++) {
+    scrollToFn.mockClear()
+    messages.splice(0, 1)
+    messages.push({ id: `m-${19 + step}` })
+    virtualizer.setOptions(virtualizer.options)
+    virtualizer._willUpdate()
+
+    expect(scrollToFn.mock.calls.at(-1)?.[0]).toBe(800)
+    // A no-op end scroll produces no browser scroll event.
+    expect(virtualizer.isAtEnd()).toBe(true)
+    virtualizer.getVirtualItems()
+  }
+})
+
+test.each([
+  { name: 'replacement', ids: [8, 9, 10, 11, 12, 13, 14, 15], target: null },
+  { name: 'reorder', ids: [1, 0, 2, 3, 4, 5, 7, 6], target: null },
+  { name: 'rotation', ids: [1, 2, 3, 4, 5, 6, 7, 0], target: 150 },
+  { name: 'rotation with append', ids: [2, 3, 4, 5, 6, 7, 0, 8], target: 100 },
+  { name: 'reordered overlap', ids: [1, 3, 2, 4, 5, 6, 7, 8], target: 150 },
+  { name: 'trim only', ids: [1, 2, 3, 4, 5, 6, 7], target: 150 },
+  {
+    name: 'prepend and trim tail',
+    ids: [-1, 0, 1, 2, 3, 4, 5, 6],
+    target: 250,
+  },
+])('followOnAppend does not follow $name', ({ ids, target }) => {
+  const messages = Array.from({ length: 8 }, (_, i) => ({ id: `m-${i}` }))
+  const { setMessages, scrollToFn } = createChatVirtualizer({
+    messages,
+    offset: 200,
+    followOnAppend: true,
+  })
+
+  setMessages(ids.map((id) => ({ id: `m-${id}` })))
+
+  if (target === null) {
+    expect(scrollToFn).not.toHaveBeenCalled()
+  } else {
+    expect(scrollToFn).toHaveBeenCalledTimes(1)
+    expect(scrollToFn.mock.calls[0]![0]).toBe(target)
+    expect(scrollToFn.mock.calls[0]![1].behavior).toBeUndefined()
+  }
 })
 
 test('anchorTo:end keeps a pinned streaming message pinned as it grows', () => {
@@ -3359,6 +3957,29 @@ test('observeElementOffset: attaches scroll listener and fires callback with scr
   expect(cb).toHaveBeenCalledWith(50, true)
   cleanup?.()
   expect(listeners.has('scroll')).toBe(false)
+})
+
+test('observeElementOffset: fallback reads offset after programmatic changes', () => {
+  vi.useFakeTimers()
+  try {
+    const cb = vi.fn()
+    const listeners = new Map<string, EventListener>()
+    const el: any = {
+      scrollTop: 50,
+      scrollLeft: 0,
+      addEventListener: (name: string, fn: any) => listeners.set(name, fn),
+      removeEventListener: (name: string) => listeners.delete(name),
+    }
+    observeElementOffset(makeObserveInstance(el) as any, cb)
+
+    listeners.get('scroll')!({} as Event)
+    el.scrollTop = 125
+    vi.advanceTimersByTime(150)
+
+    expect(cb).toHaveBeenLastCalledWith(125, false)
+  } finally {
+    vi.useRealTimers()
+  }
 })
 
 // ─── cleanup resets the scroll flags ─────────────────────────────────────────
@@ -3752,4 +4373,552 @@ test('#1218: first measurement of a spanning item still compensates', () => {
   v.resizeItem(3, 120) // first measure: 50 -> 120, delta +70
 
   expect(v.scrollOffset).toBe(before + 70)
+})
+
+// ─── #1258: compensation write clamped by a not-yet-grown sizer ─────────────
+// 5 items × 50px + paddingEnd 80 = 330px sizer, 200px viewport → the bottom is
+// scrollTop 130. When the last item grows by 70, resizeItem writes 200, but
+// the consumer has not committed the 400px sizer yet, so the browser clamps
+// the write to the current max (130) — exactly paddingEnd short once the
+// overflowing item alone has extended scrollHeight. The write must be
+// re-issued once the sizer has grown.
+
+function clampedGrowthSetup() {
+  const messages = Array.from({ length: 5 }, (_, i) => ({ id: `m-${i}` }))
+  const setup = createChatVirtualizer({
+    messages,
+    offset: 130,
+    paddingEnd: 80,
+    threshold: 0,
+  })
+  setup.virtualizer.resizeItem(4, 120)
+  // The end-anchor compensation fired against the not-yet-grown sizer.
+  expect(setup.scrollToFn).toHaveBeenCalledTimes(1)
+  expect(setup.scrollToFn.mock.calls[0]![1].adjustments).toBe(70)
+  return setup
+}
+
+test('#1258: clamped end-anchor write is re-issued after the read-back once the sizer grows', () => {
+  const { virtualizer, scrollElement, scrollToFn, emitScroll } =
+    clampedGrowthSetup()
+
+  // Browser read-back of the clamped write: it landed on the old max.
+  emitScroll(130)
+  // Consumer commits the grown sizer, then the layout effect runs.
+  ;(scrollElement as any).scrollHeight = 400
+  virtualizer._willUpdate()
+
+  expect(scrollToFn).toHaveBeenCalledTimes(2)
+  expect(scrollToFn.mock.calls[1]![0]).toBe(200)
+})
+
+test('#1258: clamped end-anchor write is re-issued in a sync render before the read-back', () => {
+  const { virtualizer, scrollElement, scrollToFn } = clampedGrowthSetup()
+
+  // flushSync path: the layout effect runs before the scroll event arrives.
+  ;(scrollElement as any).scrollHeight = 400
+  virtualizer._willUpdate()
+
+  expect(scrollToFn).toHaveBeenCalledTimes(2)
+  expect(scrollToFn.mock.calls[1]![0]).toBe(200)
+})
+
+test('#1258: a render without sizer growth does not re-issue; a later one does', () => {
+  const { virtualizer, scrollElement, scrollToFn, emitScroll } =
+    clampedGrowthSetup()
+
+  emitScroll(130)
+  virtualizer._willUpdate()
+  expect(scrollToFn).toHaveBeenCalledTimes(1)
+  ;(scrollElement as any).scrollHeight = 400
+  virtualizer._willUpdate()
+  expect(scrollToFn).toHaveBeenCalledTimes(2)
+})
+
+test('#1258: a real gesture after the clamp cancels the pending re-issue', () => {
+  const { virtualizer, scrollElement, scrollToFn, emitScroll } =
+    clampedGrowthSetup()
+
+  emitScroll(130)
+  // The user scrolls up to read history.
+  emitScroll(60, true)
+  ;(scrollElement as any).scrollHeight = 400
+  virtualizer._willUpdate()
+
+  expect(scrollToFn).toHaveBeenCalledTimes(1)
+})
+
+test('#1258: an unclamped compensation write is not re-issued when the sizer later grows', () => {
+  // 8 × 50 = 400px, viewport 200, user reading at 100. Item 0 (above the
+  // fold) re-measures +10 → compensation writes 110, well within max 200.
+  const messages = Array.from({ length: 8 }, (_, i) => ({ id: `m-${i}` }))
+  const { virtualizer, scrollElement, scrollToFn, emitScroll } =
+    createChatVirtualizer({ messages, offset: 100 })
+
+  virtualizer.resizeItem(0, 60)
+  expect(scrollToFn).toHaveBeenCalledTimes(1)
+  emitScroll(110)
+  ;(scrollElement as any).scrollHeight = 450
+  virtualizer._willUpdate()
+
+  expect(scrollToFn).toHaveBeenCalledTimes(1)
+})
+
+test('#1266: a consumer that grows the sizer synchronously in onChange gets the clamped write re-issued without a re-render', () => {
+  // Direct DOM updates: the adapter sets the container height inside
+  // onChange, and with an unchanged range nothing re-renders afterwards.
+  const messages = Array.from({ length: 5 }, (_, i) => ({ id: `m-${i}` }))
+  const { virtualizer, scrollElement, scrollToFn } = createChatVirtualizer({
+    messages,
+    offset: 130,
+    paddingEnd: 80,
+    threshold: 0,
+  })
+  virtualizer.options.onChange = (instance) => {
+    ;(scrollElement as any).scrollHeight = instance.getTotalSize()
+  }
+
+  virtualizer.resizeItem(4, 120)
+
+  expect(scrollToFn).toHaveBeenCalledTimes(2)
+  expect(scrollToFn.mock.calls[0]![1].adjustments).toBe(70)
+  expect(scrollToFn.mock.calls[1]![0]).toBe(200)
+  expect(virtualizer['_clampedAdjustment']).toBeNull()
+})
+
+test('#1258: both retry sites firing in one sync pass write exactly once', () => {
+  // flushSync consumer: onChange grows the sizer AND runs the layout effect
+  // (_willUpdate) synchronously inside notify. The retry after notify must then
+  // find nothing pending — no double write.
+  const messages = Array.from({ length: 5 }, (_, i) => ({ id: `m-${i}` }))
+  const { virtualizer, scrollElement, scrollToFn } = createChatVirtualizer({
+    messages,
+    offset: 130,
+    paddingEnd: 80,
+    threshold: 0,
+  })
+  virtualizer.options.onChange = (instance) => {
+    ;(scrollElement as any).scrollHeight = instance.getTotalSize()
+    instance._willUpdate()
+  }
+
+  virtualizer.resizeItem(4, 120)
+
+  expect(scrollToFn).toHaveBeenCalledTimes(2)
+  expect(scrollToFn.mock.calls[1]![0]).toBe(200)
+  expect(virtualizer['_clampedAdjustment']).toBeNull()
+})
+
+test('#1258: a partially grown sizer re-issues and stays pending until the target fits', () => {
+  const { virtualizer, scrollElement, scrollToFn, emitScroll } =
+    clampedGrowthSetup()
+  emitScroll(130)
+
+  // Sizer grew only to 360 → max 160, still short of the 200 target.
+  ;(scrollElement as any).scrollHeight = 360
+  virtualizer._willUpdate()
+  expect(scrollToFn).toHaveBeenCalledTimes(2)
+  expect(scrollToFn.mock.calls[1]![0]).toBe(200)
+  expect(virtualizer['_clampedAdjustment']).toEqual({
+    target: 200,
+    maxAtWrite: 160,
+  })
+
+  // The browser clamps that write to the new max; its read-back keeps it pending.
+  emitScroll(160)
+  expect(virtualizer['_clampedAdjustment']).not.toBeNull()
+  ;(scrollElement as any).scrollHeight = 400
+  virtualizer._willUpdate()
+  expect(scrollToFn).toHaveBeenCalledTimes(3)
+  expect(scrollToFn.mock.calls[2]![0]).toBe(200)
+  expect(virtualizer['_clampedAdjustment']).toBeNull()
+})
+
+test('#1258: cleanup drops a pending clamped write', () => {
+  const { virtualizer } = clampedGrowthSetup()
+  expect(virtualizer['_clampedAdjustment']).not.toBeNull()
+
+  virtualizer['cleanup']()
+
+  expect(virtualizer['_clampedAdjustment']).toBeNull()
+})
+
+// ─── a prepend must not strand a travelling smooth scroll ────────────────────
+// The end-anchor prepend sync in _willUpdate writes scrollTop instantly. That
+// cancels a smooth scrollToIndex the browser is still animating, and Chromium
+// drops a smooth request re-issued in the frame right after that cancel, so
+// re-driving from reconcileScroll cannot recover it. While a smooth
+// programmatic scroll is travelling, the sync is skipped: its target is
+// index-based and recomputes against the new layout, so the animation simply
+// continues. Browser coverage: react-virtual e2e/app/test/smooth-prepend.spec.ts.
+
+function createSmoothPrependVirtualizer() {
+  const mockWindow = {
+    requestAnimationFrame: vi.fn(() => 1),
+    cancelAnimationFrame: vi.fn(),
+    performance: { now: () => Date.now() },
+    ResizeObserver: vi.fn(function () {
+      return { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() }
+    }),
+  }
+  const el = {
+    scrollTop: 0,
+    scrollLeft: 0,
+    scrollWidth: 400,
+    scrollHeight: 10000, // 200 x 50
+    clientWidth: 400,
+    clientHeight: 300,
+    offsetWidth: 400,
+    offsetHeight: 300,
+    ownerDocument: { defaultView: mockWindow },
+    scrollTo: vi.fn(),
+  } as unknown as HTMLDivElement
+
+  const scrollToFn = vi.fn()
+  let scrollCallback: ((offset: number, isScrolling: boolean) => void) | null =
+    null
+  const messages = Array.from({ length: 200 }, (_, i) => `m-${i}`)
+  const v = new Virtualizer<HTMLDivElement, any>({
+    count: messages.length,
+    estimateSize: () => 50,
+    anchorTo: 'end',
+    getItemKey: (i) => messages[i]!,
+    getScrollElement: () => el,
+    scrollToFn,
+    observeElementRect: (_inst, cb) => {
+      cb({ width: 400, height: 300 })
+      return () => {}
+    },
+    observeElementOffset: (_inst, cb) => {
+      scrollCallback = cb
+      cb(9700, false)
+      return () => {}
+    },
+  })
+  v._willUpdate()
+  v.getVirtualItems()
+  scrollToFn.mockClear() // drop the mount sync write
+
+  return {
+    v,
+    scrollToFn,
+    scroll: (offset: number, isScrolling = true) => {
+      scrollCallback!(offset, isScrolling)
+      v.getVirtualItems()
+    },
+    // 5 messages x 50px land above the reader.
+    prepend: () => {
+      messages.unshift('m--5', 'm--4', 'm--3', 'm--2', 'm--1')
+      ;(el as any).scrollHeight = 10250
+      v.setOptions({
+        ...v.options,
+        count: messages.length,
+        getItemKey: (i: number) => messages[i]!,
+      })
+      v._willUpdate()
+    },
+  }
+}
+
+test('a prepend mid-flight leaves a travelling smooth scrollToIndex alone', () => {
+  const { v, scrollToFn, scroll, prepend } = createSmoothPrependVirtualizer()
+
+  v.scrollToIndex(0, { behavior: 'smooth' })
+  expect(scrollToFn.mock.calls[0]![0]).toBe(0)
+  scroll(3500) // the browser is mid-animation
+  scrollToFn.mockClear()
+
+  prepend()
+
+  // No instant scrollTop write that would cancel the animation...
+  expect(scrollToFn).not.toHaveBeenCalled()
+  // ...and the journey is still live.
+  expect(v['scrollState']).toMatchObject({ index: 0, behavior: 'smooth' })
+})
+
+test('a prepend right after a smooth scroll landed still syncs the anchor', () => {
+  const { v, scrollToFn, scroll, prepend } = createSmoothPrependVirtualizer()
+
+  v.scrollToIndex(100, { behavior: 'smooth' })
+  const target = scrollToFn.mock.calls[0]![0] as number
+  expect(target).toBe(5000)
+  // Arrived; reconcileScroll has not retired scrollState yet.
+  scroll(target, false)
+  scrollToFn.mockClear()
+
+  prepend()
+
+  // The reader's position is preserved: the DOM is synced to the shifted offset.
+  expect(scrollToFn.mock.calls.at(-1)?.[0]).toBe(target + 250)
+})
+
+// ─── #1257: paddingEnd must not make scrollToIndex(last) overshoot the last item ─────────────
+// When paddingEnd > 0, getOffsetForIndex(last, 'end') was returning the raw
+// DOM max scroll offset (scrollHeight - clientHeight), which equals
+// (content + paddingEnd - clientHeight). This caused scrollToIndex(last) to
+// scroll past the rendered end of the last item. The fix uses
+// getMaxScrollOffset() - paddingEnd + scrollPaddingEnd (clamped to
+// [0, getMaxScrollOffset()]), which with scrollPaddingEnd = 0 equals
+// (content - clientHeight) — the offset that keeps the last item flush with
+// the bottom of the viewport.
+
+test('#1257: scrollToIndex(last) with paddingEnd keeps the last item flush with the viewport bottom', () => {
+  // 5 items × 50px = 250px content, paddingEnd = 80, scrollMargin = 0
+  // viewport = 200px → total scrollHeight = 330px (250 + 80)
+  // Expected virtual max scroll offset:
+  //   getMaxScrollOffset() - paddingEnd = (330 - 200) - 80 = 50
+  // Without the fix (using raw scrollHeight - clientHeight):
+  //   330 - 200 = 130 → overshoots by 80px (exactly the paddingEnd)
+  const mockScrollElement = {
+    scrollTop: 0,
+    scrollLeft: 0,
+    scrollWidth: 200,
+    scrollHeight: 330, // 250 (content) + 80 (paddingEnd)
+    clientWidth: 200,
+    clientHeight: 200,
+    offsetWidth: 200,
+    offsetHeight: 200,
+    ownerDocument: { defaultView: globalThis },
+    scrollTo: vi.fn(),
+  } as unknown as HTMLDivElement
+
+  const scrollToFn = vi.fn()
+  const virtualizer = new Virtualizer({
+    count: 5,
+    estimateSize: () => 50,
+    paddingEnd: 80,
+    getScrollElement: () => mockScrollElement,
+    scrollToFn,
+    observeElementRect: (_instance, cb) => {
+      cb({ width: 200, height: 200 })
+      return () => {}
+    },
+    observeElementOffset: (_instance, cb) => {
+      cb(0, false)
+      return () => {}
+    },
+  })
+
+  virtualizer._willUpdate()
+  scrollToFn.mockClear()
+
+  // Scroll to last item with 'end' alignment
+  virtualizer.scrollToIndex(4, { align: 'end' })
+
+  // getMaxScrollOffset() = 330 - 200 = 130; minus paddingEnd(80) = 50
+  expect(scrollToFn).toHaveBeenCalledWith(
+    50,
+    expect.any(Object),
+    expect.any(Object),
+  )
+})
+
+// ─── #1001: getMaxScrollOffset() preserves lane-max for multi-lane layouts ─────────────
+// The fix uses getMaxScrollOffset() directly (rather than getTotalSize()), which
+// preserves the lane-max behavior added in #1105 (#1001 fix). In multi-lane layouts
+// where the last item lives in a shorter lane, getMaxScrollOffset() still absorbs
+// DOM extras that aren't in our measurements.
+
+test('#1001: scrollToIndex(last) in a shorter lane uses getMaxScrollOffset() lane-max', () => {
+  // 2 lanes: lane 0 = [0] @300px (ends at 300), lane 1 = [1..3] @50px
+  // (last item ends at 150). getTotalSize() = 300 (lane-max),
+  // getMaxScrollOffset() = 300 - 200 = 100.
+  // The fix uses getMaxScrollOffset() - paddingEnd + scrollPaddingEnd = 100 - 0 + 0 = 100.
+  // Aligning to the last item's own end would give max(150 - 200, 0) = 0.
+  const mockScrollElement = {
+    scrollTop: 0,
+    scrollLeft: 0,
+    scrollWidth: 200,
+    scrollHeight: 300,
+    clientWidth: 200,
+    clientHeight: 200,
+    offsetWidth: 200,
+    offsetHeight: 200,
+    ownerDocument: { defaultView: globalThis },
+    scrollTo: vi.fn(),
+  } as unknown as HTMLDivElement
+
+  const scrollToFn = vi.fn()
+  const virtualizer = new Virtualizer({
+    count: 4,
+    estimateSize: (index) => (index === 0 ? 300 : 50),
+    lanes: 2,
+    getScrollElement: () => mockScrollElement,
+    scrollToFn,
+    observeElementRect: (_instance, cb) => {
+      cb({ width: 200, height: 200 })
+      return () => {}
+    },
+    observeElementOffset: (_instance, cb) => {
+      cb(0, false)
+      return () => {}
+    },
+  })
+
+  virtualizer._willUpdate()
+  scrollToFn.mockClear()
+
+  expect(virtualizer.measurementsCache[3]).toMatchObject({ lane: 1, end: 150 })
+
+  virtualizer.scrollToIndex(3, { align: 'end' })
+
+  // getMaxScrollOffset() = 100; minus paddingEnd(0) = 100
+  expect(scrollToFn).toHaveBeenCalledWith(
+    100,
+    expect.any(Object),
+    expect.any(Object),
+  )
+})
+
+// ─── #1257: paddingEnd=0 is a no-op ─────────────
+test('#1257: scrollToIndex(last) with paddingEnd=0 uses getMaxScrollOffset() unchanged', () => {
+  const mockScrollElement = {
+    scrollTop: 0,
+    scrollLeft: 0,
+    scrollWidth: 200,
+    scrollHeight: 250, // 5 × 50px content, no paddingEnd
+    clientWidth: 200,
+    clientHeight: 200,
+    offsetWidth: 200,
+    offsetHeight: 200,
+    ownerDocument: { defaultView: globalThis },
+    scrollTo: vi.fn(),
+  } as unknown as HTMLDivElement
+
+  const scrollToFn = vi.fn()
+  const virtualizer = new Virtualizer({
+    count: 5,
+    estimateSize: () => 50,
+    paddingEnd: 0,
+    getScrollElement: () => mockScrollElement,
+    scrollToFn,
+    observeElementRect: (_instance, cb) => {
+      cb({ width: 200, height: 200 })
+      return () => {}
+    },
+    observeElementOffset: (_instance, cb) => {
+      cb(0, false)
+      return () => {}
+    },
+  })
+
+  virtualizer._willUpdate()
+  scrollToFn.mockClear()
+
+  virtualizer.scrollToIndex(4, { align: 'end' })
+
+  // getMaxScrollOffset() = 250 - 200 = 50; minus paddingEnd(0) = 50
+  expect(scrollToFn).toHaveBeenCalledWith(
+    50,
+    expect.any(Object),
+    expect.any(Object),
+  )
+})
+
+// ─── #1257: scrollPaddingEnd still applies to the last item ─────────────
+// A sticky footer is usually reserved with paddingEnd and kept clear with
+// scrollPaddingEnd. The last item must end above the footer, like any other
+// end-aligned item.
+test('#1257: scrollToIndex(last) with paddingEnd and scrollPaddingEnd keeps the last item above the footer', () => {
+  const mockScrollElement = {
+    scrollTop: 0,
+    scrollLeft: 0,
+    scrollWidth: 200,
+    scrollHeight: 310, // 250 (content) + 60 (paddingEnd)
+    clientWidth: 200,
+    clientHeight: 200,
+    offsetWidth: 200,
+    offsetHeight: 200,
+    ownerDocument: { defaultView: globalThis },
+    scrollTo: vi.fn(),
+  } as unknown as HTMLDivElement
+
+  const scrollToFn = vi.fn()
+  const virtualizer = new Virtualizer({
+    count: 5,
+    estimateSize: () => 50,
+    paddingEnd: 60,
+    scrollPaddingEnd: 40,
+    getScrollElement: () => mockScrollElement,
+    scrollToFn,
+    observeElementRect: (_instance, cb) => {
+      cb({ width: 200, height: 200 })
+      return () => {}
+    },
+    observeElementOffset: (_instance, cb) => {
+      cb(0, false)
+      return () => {}
+    },
+  })
+
+  virtualizer._willUpdate()
+  scrollToFn.mockClear()
+
+  virtualizer.scrollToIndex(4, { align: 'end' })
+
+  // item.end(250) + scrollPaddingEnd(40) - viewport(200) = 90, below
+  // getMaxScrollOffset() = 110 (main used 110, paddingEnd alone gives 50)
+  expect(scrollToFn).toHaveBeenCalledWith(
+    90,
+    expect.any(Object),
+    expect.any(Object),
+  )
+
+  scrollToFn.mockClear()
+  virtualizer.scrollToIndex(3, { align: 'end' })
+
+  // The item before it lands the same way: 200 + 40 - 200 = 40
+  expect(scrollToFn).toHaveBeenCalledWith(
+    40,
+    expect.any(Object),
+    expect.any(Object),
+  )
+})
+
+// ─── #1257: scrollToEnd() still reaches the DOM bottom ─────────────
+// scrollToEnd() must include paddingEnd so isAtEnd() holds afterwards
+// (followOnAppend and "jump to latest" UI rely on it), even though
+// scrollToIndex(last, 'end') now stops at the last item.
+test('#1257: scrollToEnd() with paddingEnd scrolls to getMaxScrollOffset()', () => {
+  const mockScrollElement = {
+    scrollTop: 0,
+    scrollLeft: 0,
+    scrollWidth: 200,
+    scrollHeight: 310, // 250 (content) + 60 (paddingEnd)
+    clientWidth: 200,
+    clientHeight: 200,
+    offsetWidth: 200,
+    offsetHeight: 200,
+    ownerDocument: { defaultView: globalThis },
+    scrollTo: vi.fn(),
+  } as unknown as HTMLDivElement
+
+  const scrollToFn = vi.fn()
+  const virtualizer = new Virtualizer({
+    count: 5,
+    estimateSize: () => 50,
+    paddingEnd: 60,
+    getScrollElement: () => mockScrollElement,
+    scrollToFn,
+    observeElementRect: (_instance, cb) => {
+      cb({ width: 200, height: 200 })
+      return () => {}
+    },
+    observeElementOffset: (_instance, cb) => {
+      cb(0, false)
+      return () => {}
+    },
+  })
+
+  virtualizer._willUpdate()
+  scrollToFn.mockClear()
+
+  virtualizer.scrollToEnd()
+
+  // getMaxScrollOffset() = 310 - 200 = 110, paddingEnd included
+  expect(scrollToFn).toHaveBeenCalledWith(
+    110,
+    expect.any(Object),
+    expect.any(Object),
+  )
 })
