@@ -14,13 +14,35 @@ permissions:
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*.*.*-rigel.*'
   workflow_dispatch:
 
 jobs:
+  resolve:
+    name: Resolve release tag
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.resolve.outputs.publish }}
+    steps:
+      - name: Checkout workflow ref
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+      - name: Fetch release branch
+        if: github.event_name == 'push'
+        run: git fetch --no-tags origin rigel-release:refs/remotes/origin/rigel-release
+      - name: Resolve and validate release tag
+        id: resolve
+        run: node .github/scripts/resolve-release-source.mjs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
   publish:
+    needs: [resolve]
+    if: github.repository_owner == 'RigelBuild' && needs.resolve.outputs.publish == 'true'
     name: Publish
-    if: github.repository_owner == 'RigelBuild'
     runs-on: ubuntu-latest
     permissions:
       # No provenance attestation is generated (see the publish step's

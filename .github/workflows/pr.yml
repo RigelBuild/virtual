@@ -31,6 +31,8 @@ jobs:
           main-branch-name: rigel-release
       - name: Install Playwright browsers
         run: pnpm exec playwright install chromium
+      - name: Test fork release workflows
+        run: node .github/scripts/workflow-contract.test.mjs && node .github/scripts/release-tag.test.mjs
       - name: Run Checks
         run: pnpm run test:pr
   preview:
