@@ -271,6 +271,8 @@ When used with `anchorTo: 'end'`, controls whether the virtualizer scrolls to th
 
 Passing `true` is equivalent to `'auto'`. Passing a scroll behavior uses that behavior for the follow.
 
+Following also works when older items are trimmed from the start in the same update without increasing the count. This requires persistent keys, a non-empty suffix of the old list retained in order, and appended items with new keys. Non-growing updates with no retained items are not automatically followed.
+
 This option does not follow prepends. It only follows appended output, and only when the viewport was already within `scrollEndThreshold` of the end before the append.
 
 ### `scrollEndThreshold`
@@ -456,6 +458,16 @@ scrollToEnd: (
 Scrolls the virtualizer to the end of the content. For vertical lists this is the bottom; for horizontal lists this is the right edge.
 
 This is useful for "Jump to latest" controls in chat and log views.
+
+### `cancelScroll`
+
+```tsx
+cancelScroll: () => void
+```
+
+Cancels an in-flight `scrollToIndex`, `scrollToOffset`, `scrollBy` or `scrollToEnd`. After those calls, the virtualizer keeps correcting toward the target for a short time while items are measured. Call `cancelScroll` when the user starts their own scroll (for example from `wheel`, `touchstart` or `keydown` handlers) so the viewport stays where the user takes it.
+
+The current scroll position is not changed. It does nothing when no scroll is in flight.
 
 ### `getDistanceFromEnd`
 

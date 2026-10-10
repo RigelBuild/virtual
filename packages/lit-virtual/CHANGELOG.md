@@ -1,5 +1,37 @@
 # @tanstack/lit-virtual
 
+## 3.14.3
+
+### Patch Changes
+
+- Updated dependencies [[`43675bc`](https://github.com/TanStack/virtual/commit/43675bc42e3043cb2cea4dba015df077d9813602), [`9df47a3`](https://github.com/TanStack/virtual/commit/9df47a3215f3fb3d182442316d058e2a96696e4f), [`c644f10`](https://github.com/TanStack/virtual/commit/c644f1096c9f4d8221d92862afdc9316b17df62a), [`2a631f4`](https://github.com/TanStack/virtual/commit/2a631f46f4366227533f45604af3db8e60deb70f)]:
+  - @tanstack/virtual-core@3.18.0
+
+## 3.14.2
+
+### Patch Changes
+
+- Updated dependencies [[`06d1b6b`](https://github.com/TanStack/virtual/commit/06d1b6bf8f61f203556a8fb21a6639600c9751a0), [`2c0a0ea`](https://github.com/TanStack/virtual/commit/2c0a0ea101c360ea15832c060008aa163cae2f7c)]:
+  - @tanstack/virtual-core@3.17.11
+
+## 3.14.1
+
+### Patch Changes
+
+- Updated dependencies [[`ab3278c`](https://github.com/TanStack/virtual/commit/ab3278cbe7b9a895ecdde263ad3c55c868b85d74)]:
+  - @tanstack/virtual-core@3.17.10
+
+## 3.14.0
+
+### Minor Changes
+
+- [#1264](https://github.com/TanStack/virtual/pull/1264) [`bb4e0f1`](https://github.com/TanStack/virtual/commit/bb4e0f11c0be7a29b06e2a59779fa0fa28f20afe) - Re-export `@tanstack/virtual-core` from `@tanstack/lit-virtual`, so the core API (`Virtualizer`, `defaultRangeExtractor`, `measureElement`, the scroll observers and the shared types) can be imported from the adapter without adding `@tanstack/virtual-core` as a second dependency. Every other framework adapter already does this.
+
+### Patch Changes
+
+- Updated dependencies [[`4a0adf3`](https://github.com/TanStack/virtual/commit/4a0adf3e3ba46968e0e6ba66471253e467babe55)]:
+  - @tanstack/virtual-core@3.17.9
+
 ## 3.13.37
 
 ### Patch Changes

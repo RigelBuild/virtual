@@ -1,5 +1,39 @@
 # @tanstack/react-virtual
 
+## 3.14.14
+
+### Patch Changes
+
+- [#1301](https://github.com/TanStack/virtual/pull/1301) [`ce57b78`](https://github.com/TanStack/virtual/commit/ce57b78ddf7c2c3384067c528ef59f18d3199a46) - fix(react-virtual): position `directDomUpdates` rows that mount without the owner re-rendering
+
+  Rows were only positioned by the owner's layout effect or the next `onChange`. A row mounted by a child that re-renders on its own (local state, context, a resolved Suspense boundary) skipped both when it was fixed-size, and stayed unpositioned until the range changed. Rows are now positioned as they register through `measureElement`, and `containerRef` positions the rows that mounted together with the container.
+
+- Updated dependencies [[`43675bc`](https://github.com/TanStack/virtual/commit/43675bc42e3043cb2cea4dba015df077d9813602), [`9df47a3`](https://github.com/TanStack/virtual/commit/9df47a3215f3fb3d182442316d058e2a96696e4f), [`c644f10`](https://github.com/TanStack/virtual/commit/c644f1096c9f4d8221d92862afdc9316b17df62a), [`2a631f4`](https://github.com/TanStack/virtual/commit/2a631f46f4366227533f45604af3db8e60deb70f)]:
+  - @tanstack/virtual-core@3.18.0
+
+## 3.14.13
+
+### Patch Changes
+
+- [#1282](https://github.com/TanStack/virtual/pull/1282) [`b48e3b0`](https://github.com/TanStack/virtual/commit/b48e3b0ab142f1b69d8453e531831fa3accd873f) - Skip `flushSync` for the synchronous notify raised from `measureElement`. React calls `measureElement` from a ref callback, i.e. while it is committing, and `flushSync` cannot flush there — it warns in development instead. The commit phase already runs at discrete (sync) priority, so the update lands in the same lane and the same frame without `flushSync`. Notifies from every other path (ResizeObserver re-measures, scroll adjustments) still flush synchronously.
+
+- Updated dependencies [[`06d1b6b`](https://github.com/TanStack/virtual/commit/06d1b6bf8f61f203556a8fb21a6639600c9751a0), [`2c0a0ea`](https://github.com/TanStack/virtual/commit/2c0a0ea101c360ea15832c060008aa163cae2f7c)]:
+  - @tanstack/virtual-core@3.17.11
+
+## 3.14.12
+
+### Patch Changes
+
+- Updated dependencies [[`ab3278c`](https://github.com/TanStack/virtual/commit/ab3278cbe7b9a895ecdde263ad3c55c868b85d74)]:
+  - @tanstack/virtual-core@3.17.10
+
+## 3.14.11
+
+### Patch Changes
+
+- Updated dependencies [[`4a0adf3`](https://github.com/TanStack/virtual/commit/4a0adf3e3ba46968e0e6ba66471253e467babe55)]:
+  - @tanstack/virtual-core@3.17.9
+
 ## 3.14.10
 
 ### Patch Changes
