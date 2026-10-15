@@ -72,7 +72,8 @@ passes(
     /name: Require release-branch dispatch[\s\S]*?github\.ref != 'refs\/heads\/rigel-release'[\s\S]*?name: Checkout[\s\S]*?fetch-depth: 0/.test(
       release,
     ) &&
-    /name: Create scoped release App token[\s\S]*?uses: actions\/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3\.2\.0[\s\S]*?client-id: \$\{\{ vars\.AUTOMATION_APP_CLIENT_ID \}\}[\s\S]*?private-key: \$\{\{ secrets\.AUTOMATION_APP_PRIVATE_KEY \}\}[\s\S]*?permission-contents: write[\s\S]*?repositories: virtual/.test(
+    // workflows: write lets GitHub create a tag at a commit whose workflow tree matches no branch tip.
+    /name: Create scoped release App token[\s\S]*?uses: actions\/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3\.2\.0[\s\S]*?client-id: \$\{\{ vars\.AUTOMATION_APP_CLIENT_ID \}\}[\s\S]*?private-key: \$\{\{ secrets\.AUTOMATION_APP_PRIVATE_KEY \}\}\n\s*permission-contents: write\n\s*permission-workflows: write\n\s*repositories: virtual/.test(
       release,
     ) &&
     /Mint release tag if needed[\s\S]*?release-tag\.mjs mint/.test(release) &&
