@@ -57,7 +57,9 @@ passes(
     /uses: actions\/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8\.0\.2/.test(
       publisher,
     ) &&
-    /gh release create "\$TAG" --repo "\$REPOSITORY" --verify-tag/.test(publisher),
+    /gh release create "\$TAG" --repo "\$REPOSITORY" --verify-tag/.test(
+      publisher,
+    ),
 )
 passes(
   'exactly one contents: write, held by the github-release job',
