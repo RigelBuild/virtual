@@ -11,6 +11,36 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+// A pre-push hook in a linked worktree exports GIT_DIR. Simulate that with a
+// sentinel repo, then build the child env once without the hook's git
+// variables. Every spawn in this file uses that env, so the sentinel must
+// stay unchanged.
+const sentinel = mkdtempSync(join(tmpdir(), 'virtual-git-sentinel-'))
+process.env.GIT_DIR = join(sentinel, '.git')
+const hookGitVars = [
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  'GIT_COMMON_DIR',
+]
+const childEnv = { ...process.env }
+for (const key of hookGitVars) delete childEnv[key]
+const sentinelGit = (args) => {
+  const result = spawnSync('git', args, {
+    cwd: sentinel,
+    encoding: 'utf8',
+    env: childEnv,
+  })
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout.trim()
+}
+sentinelGit(['init', '-q', '-b', 'sentinel'])
+sentinelGit(['config', 'user.name', 'sentinel'])
+sentinelGit(['config', 'user.email', 'sentinel@example.invalid'])
+sentinelGit(['commit', '-q', '--allow-empty', '-m', 'sentinel'])
+sentinelGit(['tag', 'sentinel-tag'])
+const sentinelRefs = sentinelGit(['for-each-ref'])
+
 const script = fileURLToPath(new URL('./release-tag.mjs', import.meta.url))
 const dir = mkdtempSync(join(tmpdir(), 'virtual-release-tag-'))
 const repo = join(dir, 'repo')
@@ -48,17 +78,24 @@ console.error('unexpected gh call:', args);
 process.exit(2);
 `,
 )
-const chmod = spawnSync('chmod', ['+x', join(bin, 'gh')], { encoding: 'utf8' })
+const chmod = spawnSync('chmod', ['+x', join(bin, 'gh')], {
+  encoding: 'utf8',
+  env: childEnv,
+})
 assert.equal(chmod.status, 0, chmod.stderr)
 
 const env = {
-  ...process.env,
+  ...childEnv,
   PATH: `${bin}:${process.env.PATH}`,
   GH_LOG: ghLog,
   GH_MARKER: ghMarker,
 }
 function git(args) {
-  const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' })
+  const result = spawnSync('git', args, {
+    cwd: repo,
+    encoding: 'utf8',
+    env: childEnv,
+  })
   assert.equal(result.status, 0, result.stderr)
   return result.stdout.trim()
 }
@@ -84,6 +121,7 @@ try {
   const init = spawnSync('git', ['init', '-q', '-b', 'rigel-release'], {
     cwd: repo,
     encoding: 'utf8',
+    env: childEnv,
   })
   assert.equal(init.status, 0, init.stderr)
   git(['config', 'user.name', 'test'])
@@ -182,4 +220,14 @@ try {
   console.log('ok   decimal suffix ordering accepts 10 after 9')
 } finally {
   rmSync(dir, { recursive: true, force: true })
+}
+try {
+  assert.equal(
+    sentinelGit(['for-each-ref']),
+    sentinelRefs,
+    'FAIL GIT_DIR leaked into child git',
+  )
+  console.log('ok   GIT_DIR from a hook leaves the sentinel repo unchanged')
+} finally {
+  rmSync(sentinel, { recursive: true, force: true })
 }
