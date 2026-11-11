@@ -37,15 +37,19 @@ passes(
     /needs\.resolve\.outputs\.publish == 'true'/.test(publisher) &&
     /name: Resolve and validate release tag/.test(publisher),
 )
+const packAt = publisher.indexOf('name: Pack the release tarball')
+const uploadAt = publisher.indexOf('name: Upload the release tarball')
+const publishAt = publisher.indexOf('name: Publish @rigelbuild/solid-virtual')
 passes(
   'release tarball is packed and uploaded before npm publish, and the release attaches it',
   /github-release:\s*\n\s*name: GitHub Release\s*\n[\s\S]*?needs: \[resolve, publish\]/.test(
     publisher,
   ) &&
-    publisher.indexOf('name: Pack the release tarball') <
-      publisher.indexOf('name: Upload the release tarball') &&
-    publisher.indexOf('name: Upload the release tarball') <
-      publisher.indexOf('name: Publish @rigelbuild/solid-virtual') &&
+    packAt >= 0 &&
+    uploadAt >= 0 &&
+    publishAt >= 0 &&
+    packAt < uploadAt &&
+    uploadAt < publishAt &&
     /pnpm publish "\$tarball" --tag "\$TAG"/.test(publisher) &&
     /uses: actions\/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\.0\.2/.test(
       publisher,
@@ -57,7 +61,7 @@ passes(
 )
 passes(
   'exactly one contents: write, held by the github-release job',
-  publisher.match(/contents: write/g).length === 1 &&
+  (publisher.match(/contents: write/g) ?? []).length === 1 &&
     /github-release:[\s\S]*?contents: write/.test(publisher),
 )
 const tempDir = mkdtempSync(join(tmpdir(), 'virtual-dispatch-'))
