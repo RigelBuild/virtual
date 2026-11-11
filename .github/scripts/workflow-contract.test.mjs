@@ -11,6 +11,36 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+// A pre-push hook in a linked worktree exports GIT_DIR. Simulate that with a
+// sentinel repo, then build the child env once without the hook's git
+// variables. Every spawn in this file uses that env, so the sentinel must
+// stay unchanged.
+const sentinel = mkdtempSync(join(tmpdir(), 'virtual-git-sentinel-'))
+process.env.GIT_DIR = join(sentinel, '.git')
+const hookGitVars = [
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  'GIT_COMMON_DIR',
+]
+const childEnv = { ...process.env }
+for (const key of hookGitVars) delete childEnv[key]
+const sentinelGit = (args) => {
+  const result = spawnSync('git', args, {
+    cwd: sentinel,
+    encoding: 'utf8',
+    env: childEnv,
+  })
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout.trim()
+}
+sentinelGit(['init', '-q', '-b', 'sentinel'])
+sentinelGit(['config', 'user.name', 'sentinel'])
+sentinelGit(['config', 'user.email', 'sentinel@example.invalid'])
+sentinelGit(['commit', '-q', '--allow-empty', '-m', 'sentinel'])
+sentinelGit(['tag', 'sentinel-tag'])
+const sentinelRefs = sentinelGit(['for-each-ref'])
+
 const scriptsDir = fileURLToPath(new URL('.', import.meta.url))
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const publisherPath = join(root, '.github/workflows/publish-rigelbuild.yml')
@@ -43,7 +73,7 @@ try {
   const dispatch = spawnSync(process.execPath, [resolverPath], {
     encoding: 'utf8',
     env: {
-      ...process.env,
+      ...childEnv,
       EVENT_NAME: 'workflow_dispatch',
       REF: 'refs/heads/rigel-release',
       GITHUB_OUTPUT: outputPath,
@@ -82,13 +112,18 @@ passes(
 const guardDir = mkdtempSync(join(tmpdir(), 'virtual-publisher-guard-'))
 try {
   const runGit = (args) => {
-    const result = spawnSync('git', args, { cwd: guardDir, encoding: 'utf8' })
+    const result = spawnSync('git', args, {
+      cwd: guardDir,
+      encoding: 'utf8',
+      env: childEnv,
+    })
     assert.equal(result.status, 0, result.stderr)
     return result.stdout.trim()
   }
   const init = spawnSync('git', ['init', '-q', '-b', 'rigel-release'], {
     cwd: guardDir,
     encoding: 'utf8',
+    env: childEnv,
   })
   assert.equal(init.status, 0, init.stderr)
   runGit(['config', 'user.name', 'test'])
@@ -108,7 +143,7 @@ try {
     cwd: guardDir,
     encoding: 'utf8',
     env: {
-      ...process.env,
+      ...childEnv,
       EVENT_NAME: 'push',
       REF: 'refs/tags/v3.0.0-rigel.1',
       GITHUB_OUTPUT: join(guardDir, 'accepted-output'),
@@ -128,7 +163,7 @@ try {
     cwd: guardDir,
     encoding: 'utf8',
     env: {
-      ...process.env,
+      ...childEnv,
       EVENT_NAME: 'push',
       REF: 'refs/tags/v3.0.0-rigel.2',
       GITHUB_OUTPUT: join(guardDir, 'rejected-output'),
@@ -151,7 +186,7 @@ try {
     cwd: guardDir,
     encoding: 'utf8',
     env: {
-      ...process.env,
+      ...childEnv,
       EVENT_NAME: 'push',
       REF: 'refs/tags/v3.0.0-rigel.3',
       GITHUB_OUTPUT: join(guardDir, 'detached-output'),
@@ -174,7 +209,7 @@ try {
     cwd: guardDir,
     encoding: 'utf8',
     env: {
-      ...process.env,
+      ...childEnv,
       EVENT_NAME: 'push',
       REF: 'refs/tags/v3.0.0-rc.1',
       GITHUB_OUTPUT: join(guardDir, 'bad-shape-output'),
@@ -185,4 +220,14 @@ try {
   console.log('ok   release tag outside the tracking shape is rejected')
 } finally {
   rmSync(guardDir, { recursive: true, force: true })
+}
+try {
+  assert.equal(
+    sentinelGit(['for-each-ref']),
+    sentinelRefs,
+    'FAIL GIT_DIR leaked into child git',
+  )
+  console.log('ok   GIT_DIR from a hook leaves the sentinel repo unchanged')
+} finally {
+  rmSync(sentinel, { recursive: true, force: true })
 }
