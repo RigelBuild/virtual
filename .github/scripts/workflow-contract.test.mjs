@@ -37,6 +37,21 @@ passes(
     /needs\.resolve\.outputs\.publish == 'true'/.test(publisher) &&
     /name: Resolve and validate release tag/.test(publisher),
 )
+passes(
+  'GitHub Release job publishes the packed tarball after npm publish',
+  /github-release:\s*\n\s*name: GitHub Release\s*\n[\s\S]*?needs: \[resolve, publish\]/.test(
+    publisher,
+  ) &&
+    /name: GitHub Release[\s\S]*?permissions:\s*\n[\s\S]*?contents: write/.test(
+      publisher,
+    ) &&
+    /uses: actions\/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\.0\.2/.test(
+      publisher,
+    ) &&
+    /uses: actions\/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8\.0\.2/.test(
+      publisher,
+    ),
+)
 const tempDir = mkdtempSync(join(tmpdir(), 'virtual-dispatch-'))
 try {
   const outputPath = join(tempDir, 'github-output')

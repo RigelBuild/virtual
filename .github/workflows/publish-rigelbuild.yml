@@ -105,3 +105,42 @@ jobs:
           # provenance only from this env key, never from any .npmrc; the
           # clean name exports fine in Actions.
           pnpm_config_provenance: 'false'
+      - name: Pack the release tarball
+        run: |
+          mkdir -p "$RUNNER_TEMP/release"
+          pnpm --filter @rigelbuild/solid-virtual pack --pack-destination "$RUNNER_TEMP/release"
+          (cd "$RUNNER_TEMP/release" && sha256sum *.tgz > SHA256SUMS)
+      - name: Upload the release tarball
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: solid-virtual-tarball
+          path: ${{ runner.temp }}/release
+          if-no-files-found: error
+  github-release:
+    name: GitHub Release
+    # Runs only after npm publish succeeds, so an asset never exists for an unpublished version.
+    needs: [resolve, publish]
+    if: github.repository_owner == 'RigelBuild' && needs.resolve.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      # Creating the release and uploading its asset is the only write this job makes.
+      contents: write
+    steps:
+      - name: Download the release tarball
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: solid-virtual-tarball
+          path: release
+      - name: Create or refresh the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
+            echo "release $TAG already exists; refreshing assets"
+          else
+            gh release create "$TAG" --repo "$REPOSITORY" --verify-tag --title "$TAG" --notes "Release $TAG of @rigelbuild/solid-virtual."
+          fi
+          gh release upload "$TAG" release/*.tgz release/SHA256SUMS --clobber --repo "$REPOSITORY"
