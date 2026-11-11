@@ -7,6 +7,7 @@ name: Publish (RigelBuild)
 # dist-tag from the version (prerelease -> next, GA -> latest). It reuses the
 # monorepo install/build/test tooling; only the changesets *publish step* is
 # bypassed, since it cannot scope a single renamed package's publish here.
+# A github-release job then attaches the same packed tarball and SHA256SUMS to the tag's GitHub Release.
 
 permissions:
   contents: read
@@ -75,6 +76,19 @@ jobs:
           else
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
+      - name: Pack the release tarball
+        # Pack once, then publish that exact file: the release asset is the npm tarball byte for byte.
+        run: |
+          mkdir -p "$RUNNER_TEMP/release"
+          pnpm --filter @rigelbuild/solid-virtual pack --pack-destination "$RUNNER_TEMP/release"
+          (cd "$RUNNER_TEMP/release" && sha256sum *.tgz > SHA256SUMS)
+      - name: Upload the release tarball
+        # Uploaded before publish so a failure after npm accepts the version still leaves the asset to attach.
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: solid-virtual-tarball
+          path: ${{ runner.temp }}/release
+          if-no-files-found: error
       - name: Publish @rigelbuild/solid-virtual
         # Auth is the NPM_TOKEN secret (custodied via the orion Pulumi github
         # stack per DL-015), not OIDC trusted publishing — hence the ignored
@@ -95,7 +109,8 @@ jobs:
           # Create the user npmrc mode-600 at creation (umask in a subshell), so
           # the token file is never briefly world-readable.
           ( umask 077 && printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$HOME/.npmrc" )
-          pnpm publish --filter @rigelbuild/solid-virtual --tag "$TAG" --no-git-checks
+          tarball=$(ls "$RUNNER_TEMP"/release/*.tgz)
+          pnpm publish "$tarball" --tag "$TAG" --no-git-checks
         env:
           TAG: ${{ steps.disttag.outputs.tag }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -105,17 +120,6 @@ jobs:
           # provenance only from this env key, never from any .npmrc; the
           # clean name exports fine in Actions.
           pnpm_config_provenance: 'false'
-      - name: Pack the release tarball
-        run: |
-          mkdir -p "$RUNNER_TEMP/release"
-          pnpm --filter @rigelbuild/solid-virtual pack --pack-destination "$RUNNER_TEMP/release"
-          (cd "$RUNNER_TEMP/release" && sha256sum *.tgz > SHA256SUMS)
-      - name: Upload the release tarball
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: solid-virtual-tarball
-          path: ${{ runner.temp }}/release
-          if-no-files-found: error
   github-release:
     name: GitHub Release
     # Runs only after npm publish succeeds, so an asset never exists for an unpublished version.

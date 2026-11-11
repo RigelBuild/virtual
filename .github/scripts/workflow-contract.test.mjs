@@ -38,19 +38,27 @@ passes(
     /name: Resolve and validate release tag/.test(publisher),
 )
 passes(
-  'GitHub Release job publishes the packed tarball after npm publish',
+  'release tarball is packed and uploaded before npm publish, and the release attaches it',
   /github-release:\s*\n\s*name: GitHub Release\s*\n[\s\S]*?needs: \[resolve, publish\]/.test(
     publisher,
   ) &&
-    /name: GitHub Release[\s\S]*?permissions:\s*\n[\s\S]*?contents: write/.test(
-      publisher,
-    ) &&
+    publisher.indexOf('name: Pack the release tarball') <
+      publisher.indexOf('name: Upload the release tarball') &&
+    publisher.indexOf('name: Upload the release tarball') <
+      publisher.indexOf('name: Publish @rigelbuild/solid-virtual') &&
+    /pnpm publish "\$tarball" --tag "\$TAG"/.test(publisher) &&
     /uses: actions\/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\.0\.2/.test(
       publisher,
     ) &&
     /uses: actions\/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8\.0\.2/.test(
       publisher,
-    ),
+    ) &&
+    /gh release create "\$TAG" --repo "\$REPOSITORY" --verify-tag/.test(publisher),
+)
+passes(
+  'exactly one contents: write, held by the github-release job',
+  publisher.match(/contents: write/g).length === 1 &&
+    /github-release:[\s\S]*?contents: write/.test(publisher),
 )
 const tempDir = mkdtempSync(join(tmpdir(), 'virtual-dispatch-'))
 try {
